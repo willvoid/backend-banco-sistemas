@@ -52,7 +52,7 @@ db/                  schema_banco_familiar.sql
 | `GET /interbancario/creditos/{transfer_id}` | hecho |
 | `GET /cajero/autorizaciones/{operacion_id}` | hecho |
 | `POST /auth/login`, `GET /auth/me`, `POST /auth/cambiar-password` | hecho (login JWT, ver abajo) |
-| `POST /interbancario/creditos` | **pendiente** (501) — ver TODO en el router |
+| `POST /interbancario/creditos` | hecho (este banco como destino) |
 | `POST /cajero/autorizaciones` | **pendiente** (501) |
 | `POST /transferencias` (frontend propio) | **interna hecha**; interbancaria pendiente (501) |
 
@@ -77,6 +77,19 @@ cada transferencia que el usuario confirma; los reintentos de esa misma operaci�
   `SOLICITUD_INVALIDA` (400, misma cuenta o falta `Idempotency-Key`).
 - Misma clave y mismos datos → mismo resultado sin volver a debitar (también si era un rechazo).
 - Si `banco_destino` es otro banco responde 501 hasta que se implemente la interbancaria.
+
+## Crédito interbancario recibido (`POST /interbancario/creditos`)
+
+Lo llama otro banco, firmado con Ed25519, para acreditar una transferencia que salió de él
+(doc 02, sección 4, paso 2). Se consulta con `GET /interbancario/creditos/{transfer_id}`.
+
+- Siempre responde **200** con `estado` `ACREDITADO` o `RECHAZADO` + `motivo_rechazo`
+  (`CUENTA_NO_EXISTE`, `CUENTA_INACTIVA`), como indica el OpenAPI. Los rechazos también se guardan.
+- Idempotencia por `(banco_origen, transfer_id)`: un reintento devuelve lo mismo sin acreditar dos
+  veces; el mismo `transfer_id` con otros datos → `409 CONFLICTO_IDEMPOTENCIA`.
+- `banco_origen` del cuerpo debe coincidir con `X-Bank-Id` (quien firma) → si no, `400 SOLICITUD_INVALIDA`.
+- Acredita bajo bloqueo de la cuenta (`FOR UPDATE`) y registra `movimientos` y `eventos_operacion`.
+- Cada banco solo puede consultar sus propios créditos.
 
 ## Login del frontend (JWT)
 
