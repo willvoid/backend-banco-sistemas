@@ -1,23 +1,10 @@
-"""Transferencia interna contra un MySQL real (FOR UPDATE, UNIQUE y CHECK no se pueden simular).
+"""Transferencia interna contra MySQL (ver tests/conftest.py para cómo correrlos)."""
 
-Se saltean si no se define TEST_MYSQL_PORT. Usan la base `banco_test`, que se borra y se
-recrea en cada test: NO apuntar a una base con datos reales.
-
-  $env:TEST_MYSQL_PORT=3306; $env:TEST_MYSQL_PASSWORD="..."; python -m pytest
-"""
-
-import os
-import threading
 import uuid
-from pathlib import Path
 
-import pymysql
 import pytest
 from fastapi.testclient import TestClient
-from pymysql.constants import CLIENT
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.engine import URL
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import func, select
 
 from app.auth import usuario_actual
 from app.database import get_db
@@ -26,59 +13,11 @@ from app.main import app
 from app.models import ConsumoDiario, Cuenta, Movimiento, Transferencia, Usuario
 from app.schemas import SolicitudTransferencia
 from app.services.transferencias import transferir
-
-PORT = os.getenv("TEST_MYSQL_PORT")
-pytestmark = pytest.mark.skipif(
-    not PORT, reason="Definir TEST_MYSQL_PORT para correr los tests contra MySQL"
-)
-DB = "banco_test"
-ESQUEMA = Path(__file__).resolve().parent.parent / "db" / "schema_banco_familiar.sql"
+from tests.conftest import en_paralelo
 
 # Datos del esquema: titular 1 = Ana (1001, 1004 bloqueada), 2 = Bruno (1002, 1005 cerrada),
 # 3 = Carla (1003). Saldos: 1001=5.000.000, 1002=1.000.000, 1003=50.000.000.
 ANA, BRUNO, CARLA = 1, 2, 3
-
-
-def _credenciales():
-    return dict(
-        host=os.getenv("TEST_MYSQL_HOST", "127.0.0.1"),
-        port=int(PORT),
-        user=os.getenv("TEST_MYSQL_USER", "root"),
-        password=os.getenv("TEST_MYSQL_PASSWORD", ""),
-    )
-
-
-@pytest.fixture
-def S():
-    """sessionmaker sobre una base banco_test recién creada con los datos de ejemplo."""
-    c = _credenciales()
-    sql = ESQUEMA.read_text(encoding="utf-8").replace("banco_familiar", DB)
-    con = pymysql.connect(
-        **c, charset="utf8mb4", client_flag=CLIENT.MULTI_STATEMENTS, autocommit=True
-    )
-    try:
-        with con.cursor() as cur:
-            cur.execute(f"DROP DATABASE IF EXISTS {DB}")
-            cur.execute(sql)
-            while cur.nextset():
-                pass
-    finally:
-        con.close()
-    engine = create_engine(
-        URL.create(
-            "mysql+pymysql",
-            username=c["user"],
-            password=c["password"] or None,
-            host=c["host"],
-            port=c["port"],
-            database=DB,
-            query={"charset": "utf8mb4"},
-        ),
-        connect_args={"init_command": "SET time_zone = '+00:00'"},
-        pool_size=20,
-    )
-    yield sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    engine.dispose()
 
 
 def _sol(origen, destino, importe, banco="BCO1"):
@@ -210,29 +149,8 @@ def test_interbancaria_todavia_no_implementada(S):
 
 
 # --- Concurrencia (caso 14) ------------------------------------------------------------------------
-def _en_paralelo(funciones):
-    barrera = threading.Barrier(len(funciones))
-    resultados = [None] * len(funciones)
-
-    def correr(i, f):
-        barrera.wait()
-        try:
-            resultados[i] = f()
-        except ApiError as e:
-            resultados[i] = e.error
-        except Exception as e:  # deadlocks u otros errores de base harían fallar el test
-            resultados[i] = repr(e)
-
-    hilos = [threading.Thread(target=correr, args=(i, f)) for i, f in enumerate(funciones)]
-    for h in hilos:
-        h.start()
-    for h in hilos:
-        h.join(30)
-    return resultados
-
-
 def test_caso14_dos_debitos_simultaneos_solo_uno_pasa(S):
-    r = _en_paralelo([lambda: _hacer(S, BRUNO, _sol("1002", "1001", 700_000)).estado] * 2)
+    r = en_paralelo([lambda: _hacer(S, BRUNO, _sol("1002", "1001", 700_000)).estado] * 2)
     assert sorted(r) == ["COMPLETADA", "FONDOS_INSUFICIENTES"]
     assert _saldo(S, "1002") == 300_000
 
@@ -241,7 +159,7 @@ def test_transferencias_cruzadas_simultaneas_no_se_bloquean(S):
     total = _total(S)
     ida = lambda: _hacer(S, ANA, _sol("1001", "1002", 1_000)).estado  # noqa: E731
     vuelta = lambda: _hacer(S, BRUNO, _sol("1002", "1001", 1_000)).estado  # noqa: E731
-    r = _en_paralelo([ida, vuelta] * 8)
+    r = en_paralelo([ida, vuelta] * 8)
     assert r == ["COMPLETADA"] * 16
     assert _saldo(S, "1001") == 5_000_000 and _saldo(S, "1002") == 1_000_000
     assert _total(S) == total
@@ -249,7 +167,7 @@ def test_transferencias_cruzadas_simultaneas_no_se_bloquean(S):
 
 def test_misma_clave_en_paralelo_debita_una_sola_vez(S):
     clave = str(uuid.uuid4())
-    r = _en_paralelo([lambda: _hacer(S, ANA, _sol("1001", "1002", 50_000), clave).transfer_id] * 4)
+    r = en_paralelo([lambda: _hacer(S, ANA, _sol("1001", "1002", 50_000), clave).transfer_id] * 4)
     assert len(set(r)) == 1, r
     assert _saldo(S, "1001") == 4_950_000
     assert _contar(S, Transferencia) == 1

@@ -16,6 +16,11 @@ FechaUTC = Annotated[
     datetime, AfterValidator(lambda d: d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d)
 ]
 
+# Longitudes de las columnas de la base: sin esto, un valor largo terminaría en un 500.
+NumeroCuenta = Annotated[str, Field(min_length=1, max_length=30)]
+BancoId = Annotated[str, Field(min_length=1, max_length=10)]
+Concepto = Annotated[str, Field(max_length=255)]
+
 
 class ErrorOut(BaseModel):
     error: str
@@ -25,12 +30,12 @@ class ErrorOut(BaseModel):
 # --- Créditos interbancarios (este banco como destino) ---------------------------------
 class SolicitudCredito(BaseModel):
     transfer_id: UUID
-    cuenta_destino: str
-    banco_origen: str
-    cuenta_origen: str
+    cuenta_destino: NumeroCuenta
+    banco_origen: BancoId
+    cuenta_origen: NumeroCuenta
     importe: int = Field(ge=1, description="Guaraníes, entero")
     moneda: Literal["PYG"]
-    concepto: str | None = None
+    concepto: Concepto | None = None
 
 
 class CreditoOut(BaseModel):
@@ -51,9 +56,9 @@ class CuentaOut(BaseModel):
 # --- Cajero (este banco como emisor) ---------------------------------------------------
 class SolicitudAutorizacionCajero(BaseModel):
     operacion_id: UUID
-    banco_cuenta: str
-    numero_cuenta: str
-    pin: str = Field(repr=False, description="Nunca registrar en logs ni en auditoría")
+    banco_cuenta: BancoId
+    numero_cuenta: NumeroCuenta
+    pin: str = Field(max_length=72, repr=False, description="Nunca registrar en logs ni en auditoría")
     importe: int = Field(ge=1)
     moneda: Literal["PYG"]
 
@@ -67,11 +72,11 @@ class AutorizacionCajeroOut(BaseModel):
 
 # --- API propia para el frontend de este banco (no es parte del contrato) ----------------
 class SolicitudTransferencia(BaseModel):
-    cuenta_origen: str
-    banco_destino: str
-    cuenta_destino: str
+    cuenta_origen: NumeroCuenta
+    banco_destino: BancoId
+    cuenta_destino: NumeroCuenta
     importe: int = Field(ge=1)
-    concepto: str | None = None
+    concepto: Concepto | None = None
 
 
 class TransferenciaOut(BaseModel):
