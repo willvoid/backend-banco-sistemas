@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Crear entorno e instalar dependencias",
+      "type": "shell",
+      "command": "python -m venv .venv; .venv/Scripts/python.exe -m pip install -r requirements.txt",
+      "problemMatcher": []
+    },
+    {
+      "label": "Generar claves Ed25519",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe -m scripts.generar_claves",
+      "problemMatcher": []
+    },
+    {
+      "label": "Ejecutar API",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8001",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Tests",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe -m pytest -v",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}
