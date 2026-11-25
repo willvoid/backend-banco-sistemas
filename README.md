@@ -18,7 +18,11 @@ Implementa el contrato de `05_openapi_v2.yaml` sobre la base `banco_familiar` (M
    (tu fila) y al BCP simulado.
 6. Ejecutar: `F5` → *API: uvicorn (debug)* (puerto 8001), o la tarea **Ejecutar API**.
    Documentación interactiva en <http://127.0.0.1:8001/docs>; salud en `/health`.
-7. Tests: tarea **Tests** o `python -m pytest`.
+7. Tests: tarea **Tests** o `python -m pytest`. Los de transferencias necesitan MySQL y se saltean
+   si no se define `TEST_MYSQL_PORT`. Usan la base `banco_test`, que **se borra y se recrea**:
+   ```powershell
+   $env:TEST_MYSQL_PORT=3306; $env:TEST_MYSQL_PASSWORD="tu_clave"; python -m pytest
+   ```
 
 ## Estructura
 
@@ -34,8 +38,9 @@ app/
   dependencies.py    verificar_firma: autentica al banco que llama
   banco_client.py    llamar_banco(): cliente firmado hacia otros bancos
   routers/           cuentas, interbancario, cajero, transferencias (frontend propio)
-scripts/             generar_claves, cliente_prueba
-tests/               firma y contrato de errores (no requieren MySQL)
+  services/          lógica de negocio (transferencias)
+scripts/             generar_claves, cliente_prueba, crear_usuario, cargar_credenciales_prueba
+tests/               firma, errores, login (sin MySQL) y transferencias (con MySQL)
 db/                  schema_banco_familiar.sql
 ```
 
@@ -49,10 +54,29 @@ db/                  schema_banco_familiar.sql
 | `POST /auth/login`, `GET /auth/me`, `POST /auth/cambiar-password` | hecho (login JWT, ver abajo) |
 | `POST /interbancario/creditos` | **pendiente** (501) — ver TODO en el router |
 | `POST /cajero/autorizaciones` | **pendiente** (501) |
-| `POST /transferencias` (frontend propio) | **pendiente** (501); ya exige login |
+| `POST /transferencias` (frontend propio) | **interna hecha**; interbancaria pendiente (501) |
 
 Ya funciona: verificación de firma, ventana de ±5 min, errores del catálogo y registro de rechazos en
 `solicitudes_entrantes`.
+
+## Transferencia interna (`POST /transferencias`)
+
+Requiere `Authorization: Bearer <token>` y el header `Idempotency-Key` (se sugiere un UUID nuevo por
+cada transferencia que el usuario confirma; los reintentos de esa misma operación usan la misma clave).
+
+```json
+{"cuenta_origen": "1001", "banco_destino": "BCO1", "cuenta_destino": "1002", "importe": 150000, "concepto": "opcional"}
+```
+
+- Una sola transacción: bloquea ambas cuentas (`FOR UPDATE`) en orden de número de cuenta, valida,
+  debita, acredita y registra `movimientos`, `consumo_diario`, `transferencias` y `eventos_operacion`.
+- Validaciones, en orden: cuenta origen activa → destino existe y activa → tope por operación
+  (10.000.000) → límite diario combinado → saldo disponible.
+- Errores: `PROHIBIDO` (403, la cuenta de origen no es del usuario), `CUENTA_NO_EXISTE` (404),
+  `CUENTA_INACTIVA` / `LIMITE_EXCEDIDO` / `FONDOS_INSUFICIENTES` / `CONFLICTO_IDEMPOTENCIA` (409),
+  `SOLICITUD_INVALIDA` (400, misma cuenta o falta `Idempotency-Key`).
+- Misma clave y mismos datos → mismo resultado sin volver a debitar (también si era un rechazo).
+- Si `banco_destino` es otro banco responde 501 hasta que se implemente la interbancaria.
 
 ## Login del frontend (JWT)
 

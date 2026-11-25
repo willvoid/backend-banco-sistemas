@@ -5,11 +5,16 @@ debe responder LIMITE_EXCEDIDO (409), no SOLICITUD_INVALIDA (400). Los valida la
 de negocio contra config_banco.
 """
 
-from datetime import datetime
-from typing import Literal
+from datetime import datetime, timezone
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+
+# MySQL devuelve DATETIME sin zona; la base trabaja en UTC. Se marca como UTC al responder.
+FechaUTC = Annotated[
+    datetime, AfterValidator(lambda d: d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d)
+]
 
 
 class ErrorOut(BaseModel):
@@ -32,7 +37,7 @@ class CreditoOut(BaseModel):
     transfer_id: UUID
     estado: Literal["ACREDITADO", "RECHAZADO", "PENDIENTE"]
     motivo_rechazo: str | None = None
-    fecha_hora: datetime | None = None
+    fecha_hora: FechaUTC | None = None
 
 
 # --- Cuentas ---------------------------------------------------------------------------
@@ -57,7 +62,7 @@ class AutorizacionCajeroOut(BaseModel):
     operacion_id: UUID
     estado: Literal["AUTORIZADO", "RECHAZADO", "PENDIENTE"]
     motivo_rechazo: str | None = None
-    fecha_hora: datetime | None = None
+    fecha_hora: FechaUTC | None = None
 
 
 # --- API propia para el frontend de este banco (no es parte del contrato) ----------------
@@ -73,6 +78,12 @@ class TransferenciaOut(BaseModel):
     transfer_id: UUID
     estado: Literal["RECIBIDA", "RESERVADA", "COMPLETADA", "FALLIDA", "PENDIENTE", "RECHAZADA"]
     motivo_rechazo: str | None = None
+    tipo: Literal["INTERNA", "INTERBANCARIA"]
+    cuenta_origen: str
+    banco_destino: str
+    cuenta_destino: str
+    importe: int
+    fecha_hora: FechaUTC | None = None
 
 
 # --- Login (API propia del frontend) -----------------------------------------------------
